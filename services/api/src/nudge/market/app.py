@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from dataclasses import asdict
 
@@ -18,6 +19,8 @@ from nudge.market.narrate import narrate  # noqa: E402
 from nudge.market.notify import send_telegram  # noqa: E402
 from nudge.market.rules import WatchItem, evaluate  # noqa: E402
 from nudge.market.serpapi import SerpApiError, fetch_quote  # noqa: E402
+
+log = logging.getLogger("nudge.market")
 
 app = FastAPI(title="Nudge", description="Heads-up alerts from live SerpApi finance data")
 
@@ -61,7 +64,8 @@ async def check(body: CheckIn) -> dict:
             from nudge.integrations.llm.client import build_llm_client
 
             llm = build_llm_client(get_settings())
-        except Exception:
+        except Exception as exc:
+            log.warning("llm unavailable, using template text (%s)", type(exc).__name__)
             llm = None  # fall back to template text
 
     results: list[dict] = []
@@ -81,6 +85,10 @@ async def check(body: CheckIn) -> dict:
             except SerpApiError as exc:
                 results.append({"symbol": item.symbol, "status": "error", "error": str(exc)})
                 continue
+            except Exception:  # one bad symbol must not drop the others
+                log.exception("unexpected failure fetching %s", item.symbol)
+                results.append({"symbol": item.symbol, "status": "error", "error": "unexpected error"})
+                continue
 
             triggers = evaluate(item, quote, min_move_pct=body.min_move_pct)
             base = {
@@ -97,7 +105,8 @@ async def check(body: CheckIn) -> dict:
             if llm is not None:
                 try:
                     summary = await narrate(llm, item, quote, triggers)
-                except Exception:
+                except Exception as exc:
+                    log.warning("llm call failed for %s (%s)", item.symbol, type(exc).__name__)
                     summary = None
 
             message = compose_message(item, quote, triggers, summary)

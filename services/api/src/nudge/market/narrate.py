@@ -20,6 +20,11 @@ ADVICE = re.compile(
 # numbers like 2,171.50 or 9.6; not digits glued to letters such as the 2 in "Q2"
 _NUM = re.compile(r"(?<![A-Za-z])\d[\d,]*(?:\.\d+)?")
 
+def _clean(text: str, limit: int = 200) -> str:
+    """Untrusted web text going into a prompt: no control characters, one line, capped."""
+    return re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]", " ", text or "")).strip()[:limit]
+
+
 SYSTEM = (
     "You write one short heads-up for a beginner investor about a stock on their list. "
     "Calm, plain English, two sentences, at most 45 words. "
@@ -32,8 +37,10 @@ SYSTEM = (
 
 def build_facts(item: WatchItem, quote: Quote, triggers: list[Trigger]) -> str:
     kind = "a holding" if item.kind == "holding" else "on their watchlist"
-    why = "; ".join(t.detail for t in triggers) or "no rule fired"
-    heads = "\n".join(f"- {n.title} ({n.source}, {n.when})" for n in pick_news(quote, 3))
+    why = "; ".join(_clean(t.detail) for t in triggers) or "no rule fired"
+    heads = "\n".join(
+        f"- {_clean(n.title)} ({_clean(n.source, 60)}, {_clean(n.when, 40)})" for n in pick_news(quote, 3)
+    )
     return (
         f"Stock: {quote.name} ({item.symbol}), {kind}\n"
         f"Price: {quote.currency} {fmt_price(quote.price)}, {quote.change_pct:+.2f}% vs previous close\n"
@@ -58,7 +65,9 @@ def is_safe(text: str, quote: Quote, facts: str | None = None) -> bool:
         return False
     if ADVICE.search(text):
         return False
-    if fmt_price(quote.price) not in text.replace(",", ""):
+    if re.search(r"https?://|www\.", text, re.I):
+        return False
+    if not any(abs(n - quote.price) < 0.01 for n in _numbers(text)):  # whole number, not a substring
         return False
     if facts is not None:  # every number the model states must come from the facts we gave it
         allowed = _numbers(facts)

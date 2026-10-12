@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -11,12 +12,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 API_URL = "https://serpapi.com/search.json"
-CACHE_DIR = Path(os.environ.get("NUDGE_CACHE_DIR", ".cache/serpapi"))
+CACHE_DIR = Path(os.environ.get("NUDGE_CACHE_DIR") or Path(__file__).resolve().parents[3] / ".cache" / "serpapi")
 CACHE_TTL_S = int(os.environ.get("NUDGE_CACHE_TTL_S", "1800"))
 
 
 class SerpApiError(RuntimeError):
     pass
+
+
+_SAFE = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,19}")
+
+
+def validate_symbol(symbol: str, exchange: str) -> tuple[str, str]:
+    """Symbols end up in a cache file name and a query string: allow only plain tickers."""
+    sym, exch = (symbol or "").strip().upper(), (exchange or "").strip().upper()
+    if not _SAFE.fullmatch(sym) or not _SAFE.fullmatch(exch):
+        raise SerpApiError("invalid symbol or exchange (letters, digits, . & _ - only)")
+    return sym, exch
+
+
+def _redact(text: object, secret: str) -> str:
+    return str(text).replace(secret, "***")[:200]
 
 
 @dataclass(frozen=True)
@@ -50,11 +66,11 @@ def _get_raw(symbol: str, exchange: str, api_key: str, use_cache: bool) -> dict:
     try:
         with urllib.request.urlopen(f"{API_URL}?{query}", timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.URLError as exc:
-        raise SerpApiError(f"request failed for {symbol}:{exchange}: {exc}") from exc
+    except (OSError, ValueError) as exc:  # network errors, timeouts, non-JSON bodies
+        raise SerpApiError(f"request failed for {symbol}:{exchange}: {_redact(exc, api_key)}") from exc
 
     if data.get("error"):
-        raise SerpApiError(f"{symbol}:{exchange}: {data['error']}")
+        raise SerpApiError(f"{symbol}:{exchange}: {_redact(data['error'], api_key)}")
 
     # cache only what we use, so nothing sensitive or bulky lands on disk
     trimmed = {k: data.get(k) for k in ("summary", "news_results")}
@@ -64,18 +80,23 @@ def _get_raw(symbol: str, exchange: str, api_key: str, use_cache: bool) -> dict:
 
 
 def fetch_quote(symbol: str, exchange: str, *, use_cache: bool = True) -> Quote:
+    symbol, exchange = validate_symbol(symbol, exchange)
     api_key = os.environ.get("SERPAPI_API_KEY")
     if not api_key:
         raise SerpApiError("SERPAPI_API_KEY is not set")
 
     raw = _get_raw(symbol, exchange, api_key, use_cache)
     summary = raw.get("summary") or {}
-    price = summary.get("extracted_price")
-    if price is None:
-        raise SerpApiError(f"no price in response for {symbol}:{exchange}")
+    try:
+        price = float(summary.get("extracted_price"))
+    except (TypeError, ValueError):
+        raise SerpApiError(f"no usable price in response for {symbol}:{exchange}") from None
 
     move = summary.get("price_movement") or {}
-    pct = float(move.get("percentage") or 0.0)
+    try:
+        pct = float(str(move.get("percentage") or 0).replace("%", "").strip() or 0)
+    except ValueError:
+        raise SerpApiError(f"unreadable price movement for {symbol}:{exchange}") from None
     if move.get("movement") == "Down":
         pct = -pct
 
