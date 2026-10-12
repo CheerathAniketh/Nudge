@@ -14,7 +14,7 @@ from nudge.market.envload import load_env
 
 load_env()
 
-from nudge.market.compose import compose_message  # noqa: E402
+from nudge.market.compose import compose_message, compose_short  # noqa: E402
 from nudge.market.narrate import narrate  # noqa: E402
 from nudge.market.notify import send_telegram  # noqa: E402
 from nudge.market.rules import WatchItem, evaluate  # noqa: E402
@@ -110,7 +110,8 @@ async def check(body: CheckIn) -> dict:
                     summary = None
 
             message = compose_message(item, quote, triggers, summary)
-            sent = await asyncio.to_thread(send_telegram, message) if body.send_telegram else False
+            short = compose_short(item, quote, triggers, summary)  # phone-sized text for Telegram only
+            sent = await asyncio.to_thread(send_telegram, short) if body.send_telegram else False
             results.append(
                 {
                     **base,
