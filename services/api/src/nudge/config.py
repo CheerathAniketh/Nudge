@@ -21,6 +21,16 @@ class Settings(BaseSettings):
     supabase_anon_key: SecretStr
     supabase_service_role_key: SecretStr
 
+    # --- LLM (provider-agnostic, see integrations/llm/client.py) ---
+    llm_provider: str = "anthropic"  # openai | anthropic | google | xai | groq | sarvam | custom
+    llm_api_key: SecretStr | None = None
+    llm_base_url: str | None = None  # only for "custom", or to override a preset
+    llm_model_standard: str | None = None
+    llm_model_cheap: str | None = None  # falls back to standard
+    llm_model_reasoning: str | None = None  # falls back to standard
+    llm_daily_token_budget: int = 2_000_000
+    llm_timeout_s: float = 60.0
+
     @property
     def supabase_auth_url(self) -> str:
         return f"{self.supabase_url.rstrip('/')}/auth/v1"

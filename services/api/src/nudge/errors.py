@@ -29,3 +29,13 @@ class InvalidInputError(NudgeError):
 class ExternalServiceError(NudgeError):
     status_code = 502
     code = "external_service_error"
+
+
+class ConfigError(NudgeError):
+    status_code = 500
+    code = "config_error"
+
+
+class BudgetExceededError(NudgeError):
+    status_code = 429
+    code = "llm_budget_exceeded"

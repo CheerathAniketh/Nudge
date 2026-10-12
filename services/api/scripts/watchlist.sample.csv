@@ -1,0 +1,5 @@
+symbol,exchange,kind,alert_above,alert_below
+RELIANCE,NSE,holding,1250,1180
+TCS,NSE,watching,,
+INFY,NSE,watching,,
+HDFCBANK,NSE,holding,,
