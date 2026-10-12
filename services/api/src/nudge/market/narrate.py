@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from nudge.integrations.llm.types import Message
-from nudge.market.compose import fmt_price
+from nudge.market.compose import fmt_price, pick_news
 from nudge.market.rules import Trigger, WatchItem
 from nudge.market.serpapi import Quote
 
@@ -17,6 +17,8 @@ ADVICE = re.compile(
     r"\b(buy|sell|accumulate|hold on|book profits?|should|must|recommend\w*|target price|guarantee\w*)\b",
     re.I,
 )
+# numbers like 2,171.50 or 9.6; not digits glued to letters such as the 2 in "Q2"
+_NUM = re.compile(r"(?<![A-Za-z])\d[\d,]*(?:\.\d+)?")
 
 SYSTEM = (
     "You write one short heads-up for a beginner investor about a stock on their list. "
@@ -31,7 +33,7 @@ SYSTEM = (
 def build_facts(item: WatchItem, quote: Quote, triggers: list[Trigger]) -> str:
     kind = "a holding" if item.kind == "holding" else "on their watchlist"
     why = "; ".join(t.detail for t in triggers) or "no rule fired"
-    heads = "\n".join(f"- {n.title} ({n.source}, {n.when})" for n in quote.news[:3])
+    heads = "\n".join(f"- {n.title} ({n.source}, {n.when})" for n in pick_news(quote, 3))
     return (
         f"Stock: {quote.name} ({item.symbol}), {kind}\n"
         f"Price: {quote.currency} {fmt_price(quote.price)}, {quote.change_pct:+.2f}% vs previous close\n"
@@ -40,13 +42,30 @@ def build_facts(item: WatchItem, quote: Quote, triggers: list[Trigger]) -> str:
     )
 
 
-def is_safe(text: str, quote: Quote) -> bool:
+def _numbers(text: str) -> set[float]:
+    out: set[float] = set()
+    for raw in _NUM.findall(text):
+        try:
+            out.add(float(raw.replace(",", "")))
+        except ValueError:
+            pass
+    return out
+
+
+def is_safe(text: str, quote: Quote, facts: str | None = None) -> bool:
     words = text.split()
     if not words or len(words) > MAX_WORDS:
         return False
     if ADVICE.search(text):
         return False
-    return fmt_price(quote.price) in text.replace(",", "")
+    if fmt_price(quote.price) not in text.replace(",", ""):
+        return False
+    if facts is not None:  # every number the model states must come from the facts we gave it
+        allowed = _numbers(facts)
+        for n in _numbers(text):
+            if not any(abs(n - a) < 1e-6 for a in allowed):
+                return False
+    return True
 
 
 async def _complete(llm: Any, messages: list[Message]) -> Any:
@@ -67,10 +86,8 @@ async def _complete(llm: Any, messages: list[Message]) -> Any:
 
 async def narrate(llm: Any, item: WatchItem, quote: Quote, triggers: list[Trigger]) -> str | None:
     """Returns the LLM text if it passes the checks, else None (caller uses the template)."""
-    messages = [
-        Message(role="system", content=SYSTEM),
-        Message(role="user", content=build_facts(item, quote, triggers)),
-    ]
+    facts = build_facts(item, quote, triggers)
+    messages = [Message(role="system", content=SYSTEM), Message(role="user", content=facts)]
     reply = await _complete(llm, messages)
     text = (reply.text or "").strip()
-    return text if is_safe(text, quote) else None
+    return text if is_safe(text, quote, facts) else None

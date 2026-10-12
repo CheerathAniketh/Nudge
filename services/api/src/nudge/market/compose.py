@@ -1,12 +1,19 @@
 """Builds the heads-up text. Never gives buy or sell advice."""
 from __future__ import annotations
 
-from nudge.market.rules import Trigger, WatchItem
-from nudge.market.serpapi import Quote
+from nudge.market.rules import MATERIAL, Trigger, WatchItem, is_tip
+from nudge.market.serpapi import NewsItem, Quote
 
 
 def fmt_price(value: float) -> str:
     return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def pick_news(quote: Quote, limit: int = 2) -> list[NewsItem]:
+    """Headlines worth showing: no stock-tip clickbait, material ones first, newest first within each group."""
+    clean = [n for n in quote.news if not is_tip(n.title)]
+    clean.sort(key=lambda n: 0 if MATERIAL.search(n.title) else 1)
+    return clean[:limit]
 
 
 def compose_message(
@@ -23,9 +30,10 @@ def compose_message(
         lines += [f"- {t.detail}" for t in triggers]
     else:
         lines.append("- no alert rule fired (demo mode)")
-    for n in quote.news[:2]:
+    shown = pick_news(quote)
+    for n in shown:
         lines.append(f"  news: {n.title} ({n.source}, {n.when})")
-    if quote.news and quote.news[0].link:
-        lines.append(f"  read: {quote.news[0].link}")
+    if shown and shown[0].link:
+        lines.append(f"  read: {shown[0].link}")
     lines.append("Heads-up only, not buy or sell advice.")
     return "\n".join(lines)

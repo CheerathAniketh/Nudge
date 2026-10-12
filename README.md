@@ -10,15 +10,19 @@ Calm, rule-based heads-ups for people who watch stocks, built on live SerpApi da
 Give Nudge a watchlist (symbol, exchange, holding or watching, optional price levels). For each symbol it:
 
 1. Fetches the live quote and recent news from SerpApi's Google Finance API.
-2. Applies deterministic rules: price at or beyond your level, a move of 2 percent or more versus the previous close, or news from the last 24 hours.
-3. When a rule fires, asks an LLM to phrase a two-sentence plain-English heads-up from those facts. Code checks the text (exact price present, at most 60 words, no advice words such as buy, sell or should) and falls back to a template if it fails or the provider times out.
+2. Applies deterministic rules: price at or beyond your level, a move of 2 percent or more versus the previous close, or material news from the last 24 hours (results, orders, stake changes, regulator action and similar). Ordinary news only rides along when a price rule has already fired, and stock-tip clickbait ("which stock to buy", "target, stop loss") is dropped everywhere.
+3. When a rule fires, asks an LLM to phrase a two-sentence plain-English heads-up from those facts. Code checks the text and falls back to a template if it fails or the provider times out:
+   - the exact price must appear,
+   - at most 60 words,
+   - no advice words (buy, sell, should, recommend and similar),
+   - every number in the text must appear in the facts given to the model.
 4. Optionally sends the message to Telegram, and returns everything as JSON.
 
 Code decides whether to alert. The LLM only phrases facts the code selected, and it never gives buy or sell advice. Every message ends with "Heads-up only, not buy or sell advice."
 
 ## How SerpApi is used
 
-All prices, moves and headlines come from the SerpApi `google_finance` engine (`q=SYMBOL:EXCHANGE`, for example `RELIANCE:NSE`): `summary.extracted_price`, `summary.price_movement` (percentage and direction), `summary.currency` and `news_results`. One search per symbol. Responses are cached on disk for 30 minutes to conserve credits. Without SerpApi there is nothing to alert on.
+All prices, moves and headlines come from the SerpApi `google_finance` engine (`q=SYMBOL:EXCHANGE`, for example `RELIANCE:NSE`): `summary.extracted_price`, `summary.price_movement` (percentage and direction), `summary.currency` and `news_results`. One search per symbol. Responses are cached on disk for 30 minutes (`NUDGE_CACHE_TTL_S`) to conserve credits. Without SerpApi there is nothing to alert on.
 
 ## Run it
 
@@ -57,28 +61,28 @@ Example result entry (prices are the last close when markets are shut):
 
 ```json
 {
-  "symbol": "TCS", "price": 2171.5, "currency": "INR", "change_pct": 4.6,
+  "symbol": "RELIANCE", "price": 1157.5, "currency": "INR", "change_pct": -1.09,
   "status": "nudge",
-  "triggers": [{"code": "big_move", "detail": "up 4.60% vs previous close"}],
-  "llm_used": true, "telegram_sent": true
+  "triggers": [{"code": "target_below", "detail": "price 1157.5 is at or below your 1180 level"}],
+  "llm_used": true, "telegram_sent": false
 }
 ```
 
-Tests: `cd services/api && uv run pytest tests/unit/test_market_rules.py tests/unit/test_market_narrate.py -q`
+Tests (18): `cd services/api && uv run pytest tests/unit/test_market_rules.py tests/unit/test_market_narrate.py tests/unit/test_market_compose.py -q`
 
 ## Built before the hackathon, and built for it
 
 | Existed before | Built for this hackathon |
 |---|---|
-| Supabase schema with row-level security, API foundation (config, logging, error handling, models, database client, repositories), a provider-agnostic LLM client | The whole `services/api/src/nudge/market/` package: SerpApi client with caching, alert rules, LLM summary with output checks, Telegram sender, the `/v1/check` API, sample watchlist, and 11 unit tests |
+| Supabase schema with row-level security, API foundation (config, logging, error handling, models, database client, repositories), a provider-agnostic LLM client | The whole `services/api/src/nudge/market/` package: SerpApi client with caching, alert rules, LLM summary with output checks, Telegram sender, the `/v1/check` API, sample watchlist, and 18 unit tests |
 
 The agent graph, web app and background worker directories come from the project's planned design and are not part of this submission.
 
 ## Limitations
 
 - Runs on demand. There is no scheduler yet, and the watchlist comes from the request, not from the database.
-- The news rule fires whenever any headline is under 24 hours old, so busy large-cap stocks alert often.
-- The LLM check verifies the price, length and advice words, not every factual claim. A summary can mention a loosely related headline or word things imprecisely.
+- "Material news" and "stock tip" detection are keyword heuristics and will misclassify some headlines.
+- The LLM check verifies the price, length, advice words and numbers, not every factual claim. A summary can still mention a loosely related headline or word things imprecisely.
 - No authentication or rate limiting on the API; it is meant for local use.
 - Data is Google Finance via SerpApi, last close outside market hours. Only Indian NSE large caps were tested.
 - Free SerpApi tier is 250 searches per month; the cache keeps reruns cheap.

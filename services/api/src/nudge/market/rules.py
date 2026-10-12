@@ -24,6 +24,26 @@ class Trigger:
 
 _AGO = re.compile(r"(\d+)\s*(minute|min|hour|hr|day)s?\s+ago", re.I)
 
+# Headlines that usually matter for a holder. News alone only alerts when one of these matches.
+MATERIAL = re.compile(
+    r"\b(results?|earnings|profits?|revenues?|orders?|acqui\w+|merger|stake|dividends?|bonus|split|"
+    r"buyback|ipo|rating|downgrad\w+|upgrad\w+|sebi|probe|fraud|penalty|fine|lawsuit|raid|guidance|"
+    r"outlook|quarter\w*|q[1-4])\b",
+    re.I,
+)
+
+
+# Stock-tip clickbait ("which stock to buy", "target, stop loss"): not news, never shown or counted.
+TIP = re.compile(
+    r"\b(which (?:stock|share)s?|(?:stocks?|shares?) to (?:buy|sell|watch)|buy or sell|buy and sell|"
+    r"buy,? sell|stop[- ]?loss|target price|multibagger|top picks?|should (?:you|investors?)|expert answers?)\b",
+    re.I,
+)
+
+
+def is_tip(title: str) -> bool:
+    return bool(TIP.search(title or ""))
+
 
 def hours_ago(text: str) -> float | None:
     """Parse Google-style relative times such as '16 hours ago'. None if unparseable."""
@@ -60,8 +80,17 @@ def evaluate(
         direction = "down" if quote.change_pct < 0 else "up"
         triggers.append(Trigger("big_move", f"{direction} {abs(quote.change_pct):.2f}% vs previous close"))
 
-    fresh = [n for n in quote.news if (h := hours_ago(n.when)) is not None and h <= news_max_age_h]
-    if fresh:
+    fresh = [
+        n
+        for n in quote.news
+        if not is_tip(n.title) and (h := hours_ago(n.when)) is not None and h <= news_max_age_h
+    ]
+    material = [n for n in fresh if MATERIAL.search(n.title)]
+    if material:
+        triggers.append(
+            Trigger("fresh_news", f"{len(fresh)} news item(s) in the last {news_max_age_h:g}h: {material[0].title}")
+        )
+    elif fresh and triggers:  # ordinary news only rides along with a price trigger
         triggers.append(
             Trigger("fresh_news", f"{len(fresh)} news item(s) in the last {news_max_age_h:g}h: {fresh[0].title}")
         )
