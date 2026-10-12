@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nudge</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
+  h1 { margin-bottom: 0; }
+  .sub { margin-top: .25rem; opacity: .75; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0 .5rem; }
+  th { text-align: left; font-size: .85rem; opacity: .75; font-weight: normal; }
+  td { padding: 2px 4px 2px 0; }
+  input, select, button { font: inherit; padding: .35rem .5rem; }
+  input[type=text], input[type=number] { width: 100%; box-sizing: border-box; }
+  .opts { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; margin: 1rem 0; }
+  .opts label { display: flex; align-items: center; gap: .35rem; }
+  .opts input[type=number] { width: 5rem; }
+  .card { border: 1px solid #8884; border-radius: 8px; padding: .75rem 1rem; margin: .75rem 0; }
+  .card h3 { margin: 0 0 .25rem; }
+  .tag { font-size: .8rem; padding: 1px 8px; border-radius: 99px; border: 1px solid #8886; margin-left: .5rem; font-weight: normal; }
+  pre { white-space: pre-wrap; word-break: break-word; margin: .5rem 0 0; font: inherit; }
+  .err { color: #c0392b; }
+  .muted { opacity: .75; font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>Nudge</h1>
+<p class="sub">Calm, rule-based heads-ups from live SerpApi Google Finance data.</p>
+
+<table>
+  <thead><tr><th>Symbol</th><th>Exchange</th><th>Kind</th><th>Alert below</th><th>Alert above</th><th></th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<button type="button" id="add">+ Add symbol</button>
+
+<div class="opts">
+  <label>Min move % <input type="number" id="minMove" value="2" step="any" min="0"></label>
+  <label><input type="checkbox" id="llm" checked> LLM-written summary</label>
+  <label><input type="checkbox" id="always"> Show every symbol (demo)</label>
+  <label><input type="checkbox" id="tg"> Send to Telegram</label>
+  <label><input type="checkbox" id="refresh"> Refresh data (uses SerpApi credits)</label>
+</div>
+
+<button type="button" id="go"><strong>Check</strong></button>
+<span id="status" class="muted"></span>
+<div id="out"></div>
+
+<p class="muted">Heads-up only, not buy or sell advice. Prices are Google Finance data via SerpApi (last close outside market hours).</p>
+
+<script>
+const rows = document.getElementById('rows');
+const MAX_ROWS = 10;
+
+function el(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text != null) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+
+function num(v) {
+  const s = String(v).trim();
+  if (s === '') return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function addRow(v = {}) {
+  if (rows.children.length >= MAX_ROWS) return;
+  const tr = document.createElement('tr');
+  const cell = (node) => { const td = document.createElement('td'); td.appendChild(node); tr.appendChild(td); };
+  const field = (cls, type, val, ph) => {
+    const i = el('input', null, cls);
+    i.type = type; i.value = val ?? ''; if (ph) i.placeholder = ph;
+    if (type === 'number') i.step = 'any';
+    return i;
+  };
+  cell(field('sym', 'text', v.symbol, 'TCS'));
+  cell(field('exch', 'text', v.exchange ?? 'NSE', 'NSE'));
+  const kind = el('select', null, 'kind');
+  for (const k of ['watching', 'holding']) kind.appendChild(el('option', k)).value = k;
+  kind.value = v.kind ?? 'watching';
+  cell(kind);
+  cell(field('below', 'number', v.alert_below, 'optional'));
+  cell(field('above', 'number', v.alert_above, 'optional'));
+  const rm = el('button', '×'); rm.type = 'button'; rm.onclick = () => tr.remove();
+  cell(rm);
+  rows.appendChild(tr);
+}
+
+function watchlist() {
+  return [...rows.children].map((tr) => ({
+    symbol: tr.querySelector('.sym').value.trim().toUpperCase(),
+    exchange: tr.querySelector('.exch').value.trim().toUpperCase() || 'NSE',
+    kind: tr.querySelector('.kind').value,
+    alert_below: num(tr.querySelector('.below').value),
+    alert_above: num(tr.querySelector('.above').value),
+  })).filter((w) => w.symbol);
+}
+
+function card(r) {
+  const c = el('div', null, 'card');
+  const h = el('h3', r.symbol);
+  h.appendChild(el('span', r.status, 'tag'));
+  c.appendChild(h);
+  if (r.status === 'error') { c.appendChild(el('div', r.error, 'err')); return c; }
+  const sign = r.change_pct > 0 ? '+' : '';
+  c.appendChild(el('div', `${r.currency} ${r.price} (${sign}${r.change_pct}% vs previous close)`));
+  if (r.status === 'quiet') { c.appendChild(el('div', 'No alert rule fired.', 'muted')); return c; }
+  c.appendChild(el('div', `LLM text: ${r.llm_used ? 'yes' : 'no (template)'} · Telegram: ${r.telegram_sent ? 'sent' : 'not sent'}`, 'muted'));
+  c.appendChild(el('pre', r.message));
+  return c;
+}
+
+async function run() {
+  const out = document.getElementById('out');
+  const status = document.getElementById('status');
+  const btn = document.getElementById('go');
+  const wl = watchlist();
+  out.replaceChildren();
+  status.className = 'muted';
+  if (!wl.length) { status.textContent = 'Add at least one symbol.'; return; }
+  const body = {
+    watchlist: wl,
+    min_move_pct: num(document.getElementById('minMove').value) ?? 2,
+    use_llm: document.getElementById('llm').checked,
+    always: document.getElementById('always').checked,
+    send_telegram: document.getElementById('tg').checked,
+    refresh: document.getElementById('refresh').checked,
+  };
+  btn.disabled = true;
+  status.textContent = 'Checking (can take up to ~30 s with the LLM)...';
+  try {
+    const resp = await fetch('/v1/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const d = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || '').slice(0, 200);
+      throw new Error(`${resp.status} ${d}`);
+    }
+    status.textContent = `${data.count} symbol(s) checked.`;
+    for (const r of data.results) out.appendChild(card(r));
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    status.className = 'err';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('add').onclick = () => addRow();
+document.getElementById('go').onclick = run;
+addRow({ symbol: 'TCS', exchange: 'NSE', kind: 'watching' });
+addRow({ symbol: 'RELIANCE', exchange: 'NSE', kind: 'holding', alert_below: 1180 });
+</script>
+</body>
+</html>

@@ -43,7 +43,7 @@ Keys in `.env`:
 | `LLM_PROVIDER`, `LLM_API_KEY` (and optionally `LLM_MODEL_*`) | LLM-written summaries; without them Nudge uses the template text |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Telegram delivery; create a bot with @BotFather, press Start on it, then read your chat id from the `getUpdates` endpoint |
 
-Try it (interactive docs are at `http://localhost:8010/docs`):
+Open `http://localhost:8010` for a basic one-page UI, or call the API directly (interactive docs at `http://localhost:8010/docs`):
 
 ```bash
 curl -s -X POST localhost:8010/v1/check -H 'Content-Type: application/json' -d '{

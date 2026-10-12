@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from dataclasses import asdict
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from nudge.market.envload import load_env
@@ -35,6 +37,14 @@ class CheckIn(BaseModel):
     send_telegram: bool = False
     always: bool = False  # demo mode: report every symbol even if no rule fired
     refresh: bool = False  # bypass the 30-minute cache (uses SerpApi credits)
+
+
+_INDEX = Path(__file__).with_name("index.html")
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    return FileResponse(_INDEX)
 
 
 @app.get("/healthz")
